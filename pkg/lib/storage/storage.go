@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"os"
 
+	"log"
+
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
@@ -67,6 +69,9 @@ func GetHashFromS3(s *session.Session, s3Bucket string, s3Key string) (string, e
 		Key:    aws.String(s3Key),
 	})
 
+	if err != nil {
+		log.Println("Error retrieving Etag ", err)
+	}
 	hash = *resp.ETag
 	return hash, err
 }

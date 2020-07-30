@@ -43,6 +43,8 @@ func ocrService(cmd *cobra.Command, args []string) error {
 	var srv ocr.Service
 	var err error
 
+	finished := make(chan bool)
+
 	if configFile == "" {
 		config, err = utils.LoadConfigurationDefaults()
 
@@ -59,6 +61,14 @@ func ocrService(cmd *cobra.Command, args []string) error {
 		srv.Init()
 		log.Println("Process")
 
+		go utils.HandleSignal()
+
+		if config.ReadQueue == "yes" {
+			go srv.ReadResponse(finished)
+		}
+		if config.ProcessInput == "yes" {
+			srv.Process(finished)
+		}
 		if webserver {
 			webagent, err := webapi.NewWebAgent(config)
 			if err != nil {
@@ -66,17 +76,11 @@ func ocrService(cmd *cobra.Command, args []string) error {
 			}
 			log.Println("Starting Web Server in", config.WebAddress, config.WebPort)
 
-			go utils.HandleSignal()
 			webagent.StartServer()
 			return err
 		}
-		if config.ReadQueue == "yes" {
-			go srv.ReadResponse()
-		}
-		if config.ProcessInput == "yes" {
-			srv.Process()
-		}
-
 	}
+	<-finished
+
 	return err
 }

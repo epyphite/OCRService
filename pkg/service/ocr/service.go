@@ -52,7 +52,9 @@ func (O *Service) readFolder(folder string) ([]string, error) {
 
 	i := 0
 	err = svc.ListObjectsPages(&s3.ListObjectsInput{
+
 		Bucket: &O.Config.CloudSourceStorage,
+		Prefix: &O.Config.CloudSourceKey,
 	}, func(p *s3.ListObjectsOutput, last bool) (shouldContinue bool) {
 		i++
 
@@ -114,7 +116,7 @@ func (O *Service) sendFile(file string) {
 }
 
 //ReadResponse will be a go routine to read the job queue
-func (O *Service) ReadResponse() error {
+func (O *Service) ReadResponse(finished chan bool) error {
 	log.Println("Launching Reader ")
 	var err error
 	var timeout int64
@@ -138,6 +140,7 @@ func (O *Service) ReadResponse() error {
 
 		if err != nil {
 			log.Println(err)
+			finished <- true
 			return err
 		}
 
@@ -221,9 +224,10 @@ func (O *Service) ReadResponse() error {
 			}
 
 		}
-		log.Println("Sleeping 2 Seconds")
-		time.Sleep(2 * time.Second)
+
 	}
+	finished <- true
+
 	return err
 }
 
@@ -332,19 +336,16 @@ func (O *Service) getProcessFiles() ([]models.OCRFileProcess, error) {
 }
 
 //Process will launch the entire process of the file or the folder
-func (O *Service) Process() error {
+func (O *Service) Process(finished chan bool) error {
 	var err error
 
 	if O.Config.CloudSourceProvider == "aws" {
 		if O.Config.CloudSourceStorage != "" {
-			if O.Config.CloudSourceKey != "" {
-				O.sendFile(O.Config.CloudSourceStorage + "/" + O.Config.CloudSourceKey)
-			}
+
 			fileList, err := O.readFolder(O.Config.CloudSourceStorage)
 			if err != nil {
 				return err
 			}
-			go O.ReadResponse()
 			for i, file := range fileList {
 				c := math.Mod(float64(i), 10)
 				if c == 9 {
@@ -355,6 +356,7 @@ func (O *Service) Process() error {
 			}
 		}
 	}
+	finished <- true
 
 	return err
 }
