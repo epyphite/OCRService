@@ -48,6 +48,7 @@ func (W *APIOne) New() http.Handler {
 	api := app.Mux.PathPrefix("/api/v1").Subrouter()
 
 	api.HandleFunc("/liveness", app.Liveness)
+	api.HandleFunc("/processInput", app.ProcessInput) //TODO -- Create POST Rest service .
 
 	return &app
 }

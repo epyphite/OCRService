@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 
 	"log"
 
@@ -42,7 +43,7 @@ func AddFileToS3(s *session.Session, file *os.File, s3Bucket string, s3DirPath s
 	size := fileInfo.Size()
 	buffer := make([]byte, size)
 	file.Read(buffer)
-	key := fmt.Sprintf("%s%s", s3DirPath, file.Name())
+	key := fmt.Sprintf("%s%s", s3DirPath, filepath.Base(file.Name()))
 
 	_, err := s3.New(s).PutObject(&s3.PutObjectInput{
 		Bucket:               aws.String(s3Bucket),

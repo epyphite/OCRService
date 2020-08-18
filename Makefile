@@ -1,5 +1,5 @@
 TIME=$(shell date +"%Y%m%d.%H%M%S")
-VERSION=0.1-alpha
+VERSION=0.5-alpha
 BINARY_NAME=OCRService
 
 BINARY_NAME_SERVER=OCRService

@@ -21,4 +21,5 @@ type Config struct {
 	WebAddress               string `json:"WebAddress"`               //Address to listen to
 	ProcessTable             string `json:"ProcessTable"`             //Job Table to store current jobs
 	ReadQueue                string `json:"ReadQueue"`                // Flag to specify if we should read the queue
+	NotifyQueueARN           string `json:"NotifyQueueArn"`           // If set we should send a notification with the name of the keys.
 }

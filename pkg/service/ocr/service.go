@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -75,18 +76,18 @@ func (O *Service) readFolder(folder string) ([]string, error) {
 	return ret, err
 }
 
-func (O *Service) sendFile(file string) {
+func (O *Service) sendFile(file string) error {
 	var job models.OCRFileProcess
 	hash, err := storage.GetHashFromS3(O.Session, O.Config.CloudSourceStorage, file)
+	log.Printf("Processing %v -  %v \n", file, hash)
 
 	ret, err := O.checkProcessFile(hash)
 	log.Println(ret)
 	log.Println(err)
 	if ret != "" {
 		log.Println(err)
-		return
+		return err
 	}
-	log.Printf("Processing %v -  %v \n", file, hash)
 
 	resp, err := O.TextractSession.StartDocumentTextDetection(&textract.StartDocumentTextDetectionInput{
 		DocumentLocation: &textract.DocumentLocation{
@@ -110,8 +111,9 @@ func (O *Service) sendFile(file string) {
 	job.FileName = file
 	job.Status = "PENDING"
 	job.TimeStamp = now.String()
-	O.saveProcessFile(job)
+	err = O.saveProcessFile(job)
 
+	return err
 	//O.Jobs = append(O.Jobs, *resp.JobId)
 }
 
@@ -130,6 +132,7 @@ func (O *Service) ReadResponse(finished chan bool) error {
 		if timeout > 12*60*60 {
 			timeout = 12 * 60 * 60
 		}
+		//TODO -- Change to config file URL
 		queue := "ocr_sqs"
 
 		svc := sqs.New(O.Session, aws.NewConfig().WithRegion("us-east-2"))
@@ -159,70 +162,78 @@ func (O *Service) ReadResponse(finished chan bool) error {
 		}
 
 		total := resp.Attributes["ApproximateNumberOfMessages"]
+
 		log.Println("Total number of messages ", *total)
+		i, err := strconv.Atoi(*total)
+		if i == 0 {
+			time.Sleep(10 * time.Second)
+		} else {
+			msgResult, err := svc.ReceiveMessage(&sqs.ReceiveMessageInput{
+				AttributeNames: []*string{
+					aws.String(sqs.MessageSystemAttributeNameSentTimestamp),
+				},
+				MessageAttributeNames: []*string{
+					aws.String(sqs.QueueAttributeNameAll),
+				},
+				QueueUrl:            queueURL,
+				MaxNumberOfMessages: aws.Int64(10),
+				VisibilityTimeout:   &timeout,
+			})
+			if err != nil {
+				log.Println(err)
+			}
 
-		msgResult, err := svc.ReceiveMessage(&sqs.ReceiveMessageInput{
-			AttributeNames: []*string{
-				aws.String(sqs.MessageSystemAttributeNameSentTimestamp),
-			},
-			MessageAttributeNames: []*string{
-				aws.String(sqs.QueueAttributeNameAll),
-			},
-			QueueUrl:            queueURL,
-			MaxNumberOfMessages: aws.Int64(10),
-			VisibilityTimeout:   &timeout,
-		})
+			if msgResult != nil {
+				for _, message := range msgResult.Messages {
+					var body models.TextractBody
+					json.Unmarshal([]byte(*message.Body), &body)
 
-		if msgResult != nil {
-			for _, message := range msgResult.Messages {
-				var body models.TextractBody
-				json.Unmarshal([]byte(*message.Body), &body)
+					//			for _, job := range O.Jobs {
+					//				if job == body.JobID {
 
-				//			for _, job := range O.Jobs {
-				//				if job == body.JobID {
+					if body.Status == "SUCCEEDED" {
+						var jobID string
+						jobID = body.JobID
 
-				if body.Status == "SUCCEEDED" {
-					var jobID string
-					jobID = body.JobID
+						var documentAnalysis textract.GetDocumentTextDetectionInput
+						documentAnalysis.SetJobId(jobID)
+						documentAnalysis.SetMaxResults(1000)
 
-					var documentAnalysis textract.GetDocumentTextDetectionInput
-					documentAnalysis.SetJobId(jobID)
-					documentAnalysis.SetMaxResults(1000)
+						textractResult, err := O.TextractSession.GetDocumentTextDetection(&documentAnalysis)
 
-					textractResult, err := O.TextractSession.GetDocumentTextDetection(&documentAnalysis)
-
-					if err != nil {
-						log.Println("Error in Textract Result ", err)
-						return err
-					}
-
-					var ocrRet models.OCRResult
-					ocrRet.Filename = body.DocumentLocation.S3ObjectName
-					ocrRet.Timestamp = body.Timestamp
-					documentAnalysis.NextToken = textractResult.NextToken
-
-					for i := 1; i < len(textractResult.Blocks); i++ {
-						if *textractResult.Blocks[i].BlockType == "LINE" {
-							ocrRet.Data = append(ocrRet.Data, *textractResult.Blocks[i].Text)
+						if err != nil {
+							log.Println("Error in Textract Result ", err)
+							return err
 						}
-					}
-					for documentAnalysis.NextToken != nil {
-						textractResult, _ := O.TextractSession.GetDocumentTextDetection(&documentAnalysis)
+
+						var ocrRet models.OCRResult
+						ocrRet.Filename = body.DocumentLocation.S3ObjectName
+						ocrRet.Timestamp = body.Timestamp
 						documentAnalysis.NextToken = textractResult.NextToken
+
 						for i := 1; i < len(textractResult.Blocks); i++ {
 							if *textractResult.Blocks[i].BlockType == "LINE" {
 								ocrRet.Data = append(ocrRet.Data, *textractResult.Blocks[i].Text)
 							}
 						}
+						for documentAnalysis.NextToken != nil {
+							textractResult, _ := O.TextractSession.GetDocumentTextDetection(&documentAnalysis)
+							documentAnalysis.NextToken = textractResult.NextToken
+							for i := 1; i < len(textractResult.Blocks); i++ {
+								if *textractResult.Blocks[i].BlockType == "LINE" {
+									ocrRet.Data = append(ocrRet.Data, *textractResult.Blocks[i].Text)
+								}
+							}
+						}
+						O.saveFile(O.Session, ocrRet)
+						O.deleteMessage(O.Session, queueURL, message.ReceiptHandle)
 					}
-					O.saveFile(O.Session, ocrRet)
-					O.deleteMessage(O.Session, queueURL, message.ReceiptHandle)
+
+					//				}
+					//			}
 				}
 
-				//				}
-				//			}
 			}
-
 		}
 
 	}
@@ -234,7 +245,9 @@ func (O *Service) ReadResponse(finished chan bool) error {
 //deleteMessage from the queue
 func (O *Service) deleteMessage(sess *session.Session, queueURL *string, messageHandle *string) error {
 	svc := sqs.New(sess, aws.NewConfig().WithRegion(O.Config.CloudSourceRegion))
-
+	if O.Config.Debug == "yes" {
+		log.Printf("Deleting Queue Message %v %v \n", O.Config.CloudSourceRegion, *messageHandle)
+	}
 	_, err := svc.DeleteMessage(&sqs.DeleteMessageInput{
 		QueueUrl:      queueURL,
 		ReceiptHandle: messageHandle,
@@ -259,7 +272,9 @@ func (O *Service) saveFile(sess *session.Session, results models.OCRResult) erro
 		if err != nil {
 			log.Println("Save File - ", err)
 		} else {
-			log.Println("File", filename, "Saved ")
+			if O.Config.Debug == "yes" {
+				log.Println("File ", filename, " Saved ")
+			}
 		}
 
 	}
@@ -335,6 +350,12 @@ func (O *Service) getProcessFiles() ([]models.OCRFileProcess, error) {
 	return nil, err
 }
 
+func (O *Service) NotifyFinished(key string) error {
+	var err error
+
+	return err
+}
+
 //Process will launch the entire process of the file or the folder
 func (O *Service) Process(finished chan bool) error {
 	var err error
@@ -342,17 +363,23 @@ func (O *Service) Process(finished chan bool) error {
 	if O.Config.CloudSourceProvider == "aws" {
 		if O.Config.CloudSourceStorage != "" {
 
+			log.Println("Starting processing ")
 			fileList, err := O.readFolder(O.Config.CloudSourceStorage)
 			if err != nil {
+				log.Println("Error ", err)
 				return err
 			}
 			for i, file := range fileList {
-				c := math.Mod(float64(i), 10)
-				if c == 9 {
-					fmt.Println("Sleeping for 10 seconds")
-					time.Sleep(10 * time.Second)
+				err = O.sendFile(file)
+				if err == nil {
+					c := math.Mod(float64(i), 10)
+					if c == 9 {
+						fmt.Println("Sleeping for 10 seconds")
+						time.Sleep(10 * time.Second)
+					}
+					O.sendFile(file)
 				}
-				O.sendFile(file)
+
 			}
 		}
 	}

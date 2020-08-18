@@ -11,6 +11,7 @@ import (
 	"github.com/gorilla/sessions"
 
 	models "github.com/epyphite/OCRService/pkg/models"
+	"github.com/epyphite/OCRService/pkg/service/ocr"
 	c1 "github.com/epyphite/OCRService/pkg/service/web/constants"
 )
 
@@ -70,6 +71,51 @@ func (a *MainWebAPI) Liveness(w http.ResponseWriter, r *http.Request) {
 
 	response.Message = "Process Alive"
 	response.ResponseCode = "200"
+	response.ResponseData = nil
+	js, err := json.Marshal(response)
+	if err != nil {
+		log.Println()
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "Application/json")
+	w.Write(js)
+}
+
+//ProcessInput will process TODO
+func (a *MainWebAPI) ProcessInput(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		w.Header().Set("Allow", "POST")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	var config models.Config
+	// Get the JSON body and decode into credentials
+	err := json.NewDecoder(r.Body).Decode(&config)
+	log.Println("Request Body ", err)
+	log.Println(r.Body)
+	var srv ocr.Service
+
+	srv.Config = config
+	finished := make(chan bool)
+
+	srv.Init()
+	log.Println("Processing Configuration file ")
+	log.Println(config)
+	if config.ProcessInput == "yes" {
+		log.Println("Launching read folder")
+		go srv.Process(finished)
+
+	}
+	if config.ReadQueue == "yes" {
+		log.Println("Launching Queue")
+		go srv.ReadResponse(finished)
+	}
+
+	var response JResponse
+	response.Message = "Process Started "
+	response.ResponseCode = "201"
 	response.ResponseData = nil
 	js, err := json.Marshal(response)
 	if err != nil {
